@@ -23,7 +23,8 @@ import tarfile
 from collections import defaultdict
 from typing import List, Tuple, Optional, Set
 from urllib.request import urlretrieve
-
+import argparse
+import pickle as pkl
 import numpy as np
 import pandas as pd
 
@@ -116,6 +117,68 @@ class CoraDataLoader:
         logger.info(f"Loaded graph: {metadata['node_count']} nodes, {metadata['edge_count']} edges")
 
         return edges, metadata
+
+
+def load_poisoned_graph(attack_method: str, attack_rate: float,
+                        dataset: str = "Cora",
+                        poisoned_dir: str = "../../CLGA/poisoned_adj") -> Tuple[List[Tuple[int, int]], dict]:
+    """
+    [CHANGE 3] Load poisoned adjacency matrix from pickle file
+
+    Args:
+        attack_method: Name of the poisoning attack (e.g., "CLGA", "metattack", "pgd")
+        attack_rate: Attack rate (e.g., 0.01, 0.05, 0.10)
+        dataset: Dataset name (default "Cora")
+        poisoned_dir: Directory containing poisoned adjacency matrices
+
+    Returns:
+        edges: List of (source, target) tuples from poisoned graph
+        metadata: Dictionary with node_count, edge_count
+    """
+    # Construct filename following the NetGAN pattern
+    pkl_filename = f"{dataset}_{attack_method}_{attack_rate}_adj.pkl"
+    pkl_path = os.path.join(poisoned_dir, pkl_filename)
+
+    logger.info(f"Loading poisoned graph from {pkl_path}...")
+
+    if not os.path.exists(pkl_path):
+        raise FileNotFoundError(
+            f"Poisoned adjacency matrix not found: {pkl_path}\n"
+            f"Expected format: {dataset}_{{attack_method}}_{{attack_rate}}_adj.pkl\n"
+            f"Please ensure the poisoned adjacency matrices are generated first."
+        )
+
+    # Load poisoned adjacency matrix
+    with open(pkl_path, "rb") as file:
+        poisoned_adj = pkl.load(file)
+
+    # Convert to numpy array if it's a PyTorch tensor
+    if hasattr(poisoned_adj, 'numpy'):
+        adj_matrix = poisoned_adj.numpy()
+    else:
+        adj_matrix = poisoned_adj
+
+    # Convert adjacency matrix to edge list
+    # For directed graphs, we iterate through the matrix
+    edges = []
+    n_nodes = adj_matrix.shape[0]
+
+    for i in range(n_nodes):
+        for j in range(n_nodes):
+            if adj_matrix[i, j] > 0:  # Edge exists
+                edges.append((i, j))
+
+    metadata = {
+        'node_count': n_nodes,
+        'edge_count': len(edges),
+        'attack_method': attack_method,
+        'attack_rate': attack_rate
+    }
+
+    logger.info(f"Loaded poisoned graph: {metadata['node_count']} nodes, {metadata['edge_count']} edges")
+    logger.info(f"Attack: {attack_method} with rate {attack_rate}")
+
+    return edges, metadata
 
 
 def create_demo_graph() -> Tuple[List[Tuple[int, int]], dict]:
