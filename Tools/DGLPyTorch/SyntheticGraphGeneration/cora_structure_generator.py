@@ -502,6 +502,28 @@ def save_graph(edges: List[Tuple[int, int]], filename: str):
     logger.info(f"Saved graph to {filename}")
 
 
+def edges_to_adjacency_matrix(edges: List[Tuple[int, int]], num_nodes: int, is_directed: bool = True) -> np.ndarray:
+    """
+    Convert edge list to dense adjacency matrix
+
+    Args:
+        edges: List of (src, dst) tuples
+        num_nodes: Size of the adjacency matrix (n x n)
+        is_directed: Whether the graph is directed
+
+    Returns:
+        Dense adjacency matrix as numpy array
+    """
+    adj_matrix = np.zeros((num_nodes, num_nodes), dtype=np.float32)
+
+    for src, dst in edges:
+        adj_matrix[src, dst] = 1
+        if not is_directed:
+            adj_matrix[dst, src] = 1
+
+    return adj_matrix
+
+
 # ============================================================================
 # [STANDALONE CODE] - Main execution pipeline
 # ============================================================================
@@ -572,9 +594,23 @@ def main():
     output_dir = "./output"
     os.makedirs(output_dir, exist_ok=True)
 
-    # Save graphs
-    save_graph(original_edges, os.path.join(output_dir, "cora_original.csv"))
-    save_graph(synthetic_edges, os.path.join(output_dir, "cora_synthetic.csv"))
+    # Convert to adjacency matrix
+    logger.info("Converting to adjacency matrix...")
+    adj_matrix = edges_to_adjacency_matrix(
+        synthetic_edges,
+        num_original_nodes,
+        is_directed=True
+    )
+    logger.info(f"Adjacency matrix shape: {adj_matrix.shape}")
+
+    # Save in format compatible with eval_graph.py
+    # Following the pattern: {method}_{dataset}.npy
+    adj_filename = os.path.join(output_dir, "rmat_cora.npy")
+    np.save(adj_filename, adj_matrix)
+    logger.info(f"Saved adjacency matrix to {adj_filename}")
+
+    # Also save edge list for reference
+    save_graph(synthetic_edges, os.path.join(output_dir, "rmat_cora_edges.csv"))
 
     # Save metadata including node coverage info
     metadata_output = {
