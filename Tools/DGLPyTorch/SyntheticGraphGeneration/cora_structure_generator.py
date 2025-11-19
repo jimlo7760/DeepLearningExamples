@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Standalone RMAT Structure Generator for Cora Dataset
+Standalone RMAT Structure Generator for Cora Dataset - v3 with Node Injection
 
 Based on "A Large Scale Synthetic Graph Dataset Generation Framework"
 (MLG 2023 KDD Workshop) by Darabi et al., NVIDIA
@@ -8,12 +8,21 @@ Based on "A Large Scale Synthetic Graph Dataset Generation Framework"
 This script combines:
 - Core RMAT algorithm from NVIDIA's repository (adapted for standalone use)
 - Standalone code for data loading and execution
+- [v3 NEW] Optional post-processing to inject missing nodes for evaluation framework compatibility
 
 Copyright (c) 2023, NVIDIA CORPORATION
 Apache 2.0 License
 
-Key Update: Now uses NVIDIA's return_node_ids parameter to properly track
-node coverage, instead of custom post-processing.
+Key Features:
+- Uses NVIDIA's return_node_ids parameter to track node coverage
+- Optional --inject_missing_nodes flag to ensure complete node coverage
+- Maintains exact node ordering (0 to N-1) for evaluation framework compatibility
+
+Node Injection Post-Processing:
+When --inject_missing_nodes is enabled, the generator adds minimal edges for any
+nodes that RMAT didn't include, ensuring the synthetic graph has exactly the same
+nodes as the original dataset. This is a post-processing step for evaluation
+framework compatibility, not part of the core RMAT algorithm.
 """
 
 import os
@@ -142,10 +151,10 @@ def create_demo_graph() -> Tuple[List[Tuple[int, int]], dict]:
     }
 
 
-
 def load_poisoned_graph(attack_method: str, attack_rate: float,
                         dataset: str = "Cora",
-                        poisoned_dir: str = "/home/luy25/robustsyntheticgraph/CLGA/poisoned_adj") -> Tuple[List[Tuple[int, int]], dict]:
+                        poisoned_dir: str = "/home/luy25/robustsyntheticgraph/CLGA/poisoned_adj") -> Tuple[
+    List[Tuple[int, int]], dict]:
     """
     [CHANGE 3] Load poisoned adjacency matrix from pickle file
 
@@ -220,6 +229,7 @@ def load_poisoned_graph(attack_method: str, attack_rate: float,
     logger.info(f"Attack: {attack_method} with rate {attack_rate}")
 
     return edges, metadata
+
 
 # ============================================================================
 # [NVIDIA REPOSITORY CODE] - Adapted from syngen/generator/graph/utils.py
@@ -583,6 +593,82 @@ def save_graph(edges: List[Tuple[int, int]], filename: str):
     logger.info(f"Saved graph to {filename}")
 
 
+def inject_missing_nodes(
+        edges: List[Tuple[int, int]],
+        node_ids_used: Set[int],
+        total_nodes: int,
+        strategy: str = "random_existing",
+        seed: int = 42
+) -> Tuple[List[Tuple[int, int]], Set[int]]:
+    """
+    [STANDALONE CODE - Post-processing for evaluation framework compatibility]
+
+    Inject minimal edges for missing nodes to ensure complete node coverage.
+
+    This is a post-processing step added for evaluation framework compatibility,
+    not part of the core RMAT algorithm. It ensures the synthetic graph has
+    exactly the same nodes as the original dataset for fair comparison.
+
+    Args:
+        edges: Original edge list from RMAT generation
+        node_ids_used: Set of node IDs that appear in the generated edges
+        total_nodes: Total number of nodes that should be in the final graph
+        strategy: How to connect missing nodes
+            - "random_existing": Connect each missing node to a random existing node
+            - "random_pair": Add random edges between missing nodes and existing nodes
+        seed: Random seed for reproducibility
+
+    Returns:
+        edges_with_injected: Edge list including injected edges
+        complete_node_set: Set of all node IDs (should equal range(total_nodes))
+    """
+    np.random.seed(seed)
+
+    missing_nodes = set(range(total_nodes)) - node_ids_used
+
+    if not missing_nodes:
+        logger.info("No missing nodes - complete coverage achieved!")
+        return edges, node_ids_used
+
+    logger.info(f"\n{'=' * 60}")
+    logger.info(f"Injecting Edges for Missing Nodes (Post-Processing)")
+    logger.info(f"{'=' * 60}")
+    logger.info(f"Missing nodes: {len(missing_nodes)}")
+    logger.info(f"Strategy: {strategy}")
+
+    edges_with_injected = edges.copy()
+    existing_nodes = list(node_ids_used)
+
+    injected_edges = []
+
+    if strategy == "random_existing":
+        # Connect each missing node to one random existing node
+        # Add bidirectional edges to maintain undirected graph property
+        for missing_node in sorted(missing_nodes):
+            target_node = np.random.choice(existing_nodes)
+            injected_edges.append((missing_node, target_node))
+            injected_edges.append((target_node, missing_node))
+
+    elif strategy == "random_pair":
+        # Create random pairs between missing and existing nodes
+        for missing_node in sorted(missing_nodes):
+            target_node = np.random.choice(existing_nodes)
+            injected_edges.append((missing_node, target_node))
+
+    else:
+        raise ValueError(f"Unknown strategy: {strategy}")
+
+    edges_with_injected.extend(injected_edges)
+    complete_node_set = node_ids_used | missing_nodes
+
+    logger.info(f"Injected edges: {len(injected_edges)}")
+    logger.info(f"Total edges (RMAT + injected): {len(edges_with_injected)}")
+    logger.info(f"Node coverage after injection: {len(complete_node_set)}/{total_nodes}")
+    logger.info(f"{'=' * 60}\n")
+
+    return edges_with_injected, complete_node_set
+
+
 def edges_to_adjacency_matrix(edges: List[Tuple[int, int]], num_nodes: int, is_directed: bool = True) -> np.ndarray:
     """
     Convert edge list to dense adjacency matrix
@@ -650,12 +736,28 @@ def main():
         default="./output",
         help="Output directory for generated graphs (default: ./output)"
     )
+    parser.add_argument(
+        "--inject_missing_nodes",
+        action="store_true",
+        help="Inject edges for missing nodes to ensure complete node coverage (post-processing for evaluation framework compatibility)"
+    )
+    parser.add_argument(
+        "--injection_strategy",
+        type=str,
+        choices=["random_existing", "random_pair"],
+        default="random_existing",
+        help="Strategy for injecting missing nodes (default: random_existing)"
+    )
 
     args = parser.parse_args()
 
     logger.info("=" * 60)
-    logger.info("RMAT Structure Generator for Cora Dataset")
-    logger.info("Using NVIDIA's return_node_ids method for node tracking")
+    logger.info("RMAT Structure Generator for Cora Dataset - v3")
+    logger.info("Core: NVIDIA's RMAT algorithm with return_node_ids")
+    if args.inject_missing_nodes:
+        logger.info(f"Post-processing: Node injection enabled ({args.injection_strategy})")
+    else:
+        logger.info("Post-processing: Node injection disabled")
     logger.info("=" * 60)
 
     # Step 1: Load original graph
@@ -710,13 +812,31 @@ def main():
         logger.warning(f"  Nodes in generated graph: {len(node_ids_used)}")
         logger.warning(f"  Missing nodes: {len(missing_nodes)}")
         logger.warning(f"{'!' * 60}")
-        logger.warning("\nThis is expected behavior with RMAT:")
-        logger.warning("- RMAT's stochastic nature means some nodes may not be selected")
-        logger.warning("- For feature alignment, you may need to:")
-        logger.warning("  1. Add edges for missing nodes, OR")
-        logger.warning("  2. Filter features to only used nodes, OR")
-        logger.warning("  3. Generate more edges to increase coverage")
-        logger.warning(f"{'!' * 60}\n")
+
+        if args.inject_missing_nodes:
+            logger.info("\n--inject_missing_nodes flag enabled: Adding edges for missing nodes...")
+            synthetic_edges, node_ids_used = inject_missing_nodes(
+                synthetic_edges,
+                node_ids_used,
+                num_original_nodes,
+                strategy=args.injection_strategy,
+                seed=42
+            )
+            missing_nodes = set(range(num_original_nodes)) - node_ids_used
+
+            if not missing_nodes:
+                logger.info(f"✓ Successfully achieved complete node coverage!")
+            else:
+                logger.error(f"✗ Node injection failed - still missing {len(missing_nodes)} nodes")
+        else:
+            logger.warning("\nTo achieve complete node coverage, run with --inject_missing_nodes")
+            logger.warning("This is expected behavior with RMAT:")
+            logger.warning("- RMAT's stochastic nature means some nodes may not be selected")
+            logger.warning("- For feature alignment, you may need to:")
+            logger.warning("  1. Add edges for missing nodes (--inject_missing_nodes), OR")
+            logger.warning("  2. Filter features to only used nodes, OR")
+            logger.warning("  3. Generate more edges to increase coverage")
+            logger.warning(f"{'!' * 60}\n")
     else:
         logger.info(f"\n{'=' * 60}")
         logger.info(f"Perfect Node Coverage: All {num_original_nodes} nodes present!")
@@ -782,7 +902,12 @@ def main():
             'c': generator._fit_results[2],
             'd': generator._fit_results[3],
         },
-        'generation_method': 'NVIDIA repository return_node_ids parameter'
+        'generation_method': 'NVIDIA RMAT with node injection post-processing' if args.inject_missing_nodes else 'NVIDIA repository return_node_ids parameter',
+        'node_injection': {
+            'enabled': args.inject_missing_nodes,
+            'strategy': args.injection_strategy if args.inject_missing_nodes else None,
+            'complete_coverage': len(missing_nodes) == 0
+        }
     }
 
     with open(os.path.join(output_dir, "metadata.json"), 'w') as f:
