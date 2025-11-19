@@ -27,6 +27,7 @@ import argparse
 import pickle as pkl
 import numpy as np
 import pandas as pd
+import torch
 
 # Configure logging
 logging.basicConfig(
@@ -119,9 +120,32 @@ class CoraDataLoader:
         return edges, metadata
 
 
+def create_demo_graph() -> Tuple[List[Tuple[int, int]], dict]:
+    """
+    [STANDALONE CODE]
+    Create a small demo graph when download fails
+    """
+    logger.info("Creating demo graph (50 nodes, 100 edges)")
+    edges = []
+    for _ in range(100):
+        src = np.random.randint(0, 50)
+        dst = np.random.randint(0, 50)
+        if src != dst:
+            edges.append((src, dst))
+
+    labels = {i: f"class_{i % 5}" for i in range(50)}
+
+    return edges, {
+        'node_count': 50,
+        'edge_count': len(edges),
+        'labels': labels
+    }
+
+
+
 def load_poisoned_graph(attack_method: str, attack_rate: float,
                         dataset: str = "Cora",
-                        poisoned_dir: str = "../../CLGA/poisoned_adj") -> Tuple[List[Tuple[int, int]], dict]:
+                        poisoned_dir: str = "/home/luy25/robustsyntheticgraph/CLGA/poisoned_adj") -> Tuple[List[Tuple[int, int]], dict]:
     """
     [CHANGE 3] Load poisoned adjacency matrix from pickle file
 
@@ -136,7 +160,9 @@ def load_poisoned_graph(attack_method: str, attack_rate: float,
         metadata: Dictionary with node_count, edge_count
     """
     # Construct filename following the NetGAN pattern
-    pkl_filename = f"{dataset}_{attack_method}_{attack_rate}_adj.pkl"
+
+    format_attack_rate = f"{attack_rate:.6f}"
+    pkl_filename = f"{dataset}_{attack_method}_{format_attack_rate}_adj.pkl"
     pkl_path = os.path.join(poisoned_dir, pkl_filename)
 
     logger.info(f"Loading poisoned graph from {pkl_path}...")
@@ -163,45 +189,37 @@ def load_poisoned_graph(attack_method: str, attack_rate: float,
     edges = []
     n_nodes = adj_matrix.shape[0]
 
-    for i in range(n_nodes):
-        for j in range(n_nodes):
-            if adj_matrix[i, j] > 0:  # Edge exists
-                edges.append((i, j))
+    # Check if matrix is symmetric
+    is_symmetric = np.allclose(adj_matrix, adj_matrix.T)
+
+    if is_symmetric:
+        # For symmetric matrices, only extract upper triangle
+        logger.info("Detected symmetric (undirected) adjacency matrix")
+        logger.info("Extracting edges from upper triangle to avoid duplication")
+        for i in range(n_nodes):
+            for j in range(i + 1, n_nodes):
+                if adj_matrix[i, j] > 0:
+                    edges.append((i, j))
+    else:
+        # For directed matrices, extract all edges
+        logger.info("Detected directed adjacency matrix")
+        for i in range(n_nodes):
+            for j in range(n_nodes):
+                if adj_matrix[i, j] > 0:
+                    edges.append((i, j))
 
     metadata = {
         'node_count': n_nodes,
         'edge_count': len(edges),
         'attack_method': attack_method,
-        'attack_rate': attack_rate
+        'attack_rate': attack_rate,
+        'is_symmetric': is_symmetric
     }
 
     logger.info(f"Loaded poisoned graph: {metadata['node_count']} nodes, {metadata['edge_count']} edges")
     logger.info(f"Attack: {attack_method} with rate {attack_rate}")
 
     return edges, metadata
-
-
-def create_demo_graph() -> Tuple[List[Tuple[int, int]], dict]:
-    """
-    [STANDALONE CODE]
-    Create a small demo graph when download fails
-    """
-    logger.info("Creating demo graph (50 nodes, 100 edges)")
-    edges = []
-    for _ in range(100):
-        src = np.random.randint(0, 50)
-        dst = np.random.randint(0, 50)
-        if src != dst:
-            edges.append((src, dst))
-
-    labels = {i: f"class_{i % 5}" for i in range(50)}
-
-    return edges, {
-        'node_count': 50,
-        'edge_count': len(edges),
-        'labels': labels
-    }
-
 
 # ============================================================================
 # [NVIDIA REPOSITORY CODE] - Adapted from syngen/generator/graph/utils.py
@@ -596,6 +614,45 @@ def main():
     [STANDALONE CODE]
     Main execution pipeline
     """
+
+    parser = argparse.ArgumentParser(
+        description="RMAT Structure Generator for Cora Dataset with Poisoning Attack Support"
+    )
+    parser.add_argument(
+        "--attack_method",
+        type=str,
+        choices=["CLGA", "random", "dice", "pgd", "minmax", "metattack", "nodeembeddingattack", "none"],
+        default="none",
+        help="Poisoning attack method (default: none for clean graph)"
+    )
+    parser.add_argument(
+        "--attack_rate",
+        type=float,
+        choices=[0.01, 0.05, 0.10],
+        default=0.10,
+        help="Attack rate used in the graph poisoning attack (default: 0.10)"
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="Cora",
+        help="Dataset name (default: Cora)"
+    )
+    parser.add_argument(
+        "--poisoned_dir",
+        type=str,
+        default="/home/luy25/robustsyntheticgraph/CLGA/poisoned_adj",
+        help="Directory containing poisoned adjacency matrices (default: /home/luy25/robustsyntheticgraph/CLGA/poisoned_adj)"
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="./output",
+        help="Output directory for generated graphs (default: ./output)"
+    )
+
+    args = parser.parse_args()
+
     logger.info("=" * 60)
     logger.info("RMAT Structure Generator for Cora Dataset")
     logger.info("Using NVIDIA's return_node_ids method for node tracking")
@@ -603,8 +660,23 @@ def main():
 
     # Step 1: Load original graph
     logger.info("\nStep 1: Loading Cora dataset...")
-    loader = CoraDataLoader()
-    original_edges, metadata = loader.load_graph()
+
+    if args.attack_method == "none":
+        # Load clean graph
+        logger.info("Loading clean Cora dataset...")
+        loader = CoraDataLoader()
+        original_edges, metadata = loader.load_graph()
+        graph_type = "clean"
+    else:
+        # [CHANGE 4] Load poisoned graph
+        logger.info(f"Loading poisoned graph ({args.attack_method}, rate={args.attack_rate})...")
+        original_edges, metadata = load_poisoned_graph(
+            attack_method=args.attack_method,
+            attack_rate=args.attack_rate,
+            dataset=args.dataset,
+            poisoned_dir=args.poisoned_dir
+        )
+        graph_type = "poisoned"
 
     num_original_nodes = metadata['node_count']
     num_original_edges = metadata['edge_count']
@@ -666,14 +738,30 @@ def main():
     )
     logger.info(f"Adjacency matrix shape: {adj_matrix.shape}")
 
+    if args.attack_method == "none":
+        adj_filename = os.path.join(output_dir, "rmat_Cora.npy")
+        edges_filename = os.path.join(output_dir, "rmat_Cora_edges.csv")
+        metadata_filename = os.path.join(output_dir, "metadata.json")
+    else:
+        adj_filename = os.path.join(
+            output_dir,
+            f"rmat_Cora_{args.attack_method}_{args.attack_rate}.npy"
+        )
+        edges_filename = os.path.join(
+            output_dir,
+            f"rmat_Cora_{args.attack_method}_{args.attack_rate}_edges.csv"
+        )
+        metadata_filename = os.path.join(
+            output_dir,
+            f"metadata_{args.attack_method}_{args.attack_rate}.json"
+        )
     # Save in format compatible with eval_graph.py
     # Following the pattern: {method}_{dataset}.npy
-    adj_filename = os.path.join(output_dir, "rmat_cora.npy")
     np.save(adj_filename, adj_matrix)
     logger.info(f"Saved adjacency matrix to {adj_filename}")
 
     # Also save edge list for reference
-    save_graph(synthetic_edges, os.path.join(output_dir, "rmat_cora_edges.csv"))
+    save_graph(synthetic_edges, edges_filename)
 
     # Save metadata including node coverage info
     metadata_output = {
