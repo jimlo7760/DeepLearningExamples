@@ -43,6 +43,7 @@ import pickle as pkl
 import numpy as np
 import pandas as pd
 import torch
+import random
 
 # Configure logging
 logging.basicConfig(
@@ -776,6 +777,36 @@ def edges_to_adjacency_matrix(edges: List[Tuple[int, int]], num_nodes: int, is_d
     return adj_matrix
 
 
+def shuffle_node_ids(edges: List[Tuple[int, int]], num_nodes: int, seed: int = 42) -> Tuple[
+    List[Tuple[int, int]], List[int], List[int]]:
+    """
+    Shuffle node IDs to eliminate positional bias in RMAT
+
+    Args:
+        edges: Original edge list
+        num_nodes: Total number of nodes
+        seed: Random seed
+
+    Returns:
+        shuffled_edges: Edge list with shuffled node IDs
+        shuffle_perm: Mapping from original ID to shuffled ID (old_id -> new_id)
+        unshuffle_perm: Mapping from shuffled ID to original ID (new_id -> old_id)
+    """
+    rng = random.Random(seed)
+
+    # Create shuffling permutation
+    shuffle_perm = list(range(num_nodes))
+    rng.shuffle(shuffle_perm)
+
+    # Create inverse permutation for unshuffling
+    unshuffle_perm = [0] * num_nodes
+    for new_id, old_id in enumerate(shuffle_perm):
+        unshuffle_perm[old_id] = new_id
+
+    # Shuffle edges
+    shuffled_edges = [(unshuffle_perm[src], unshuffle_perm[dst]) for src, dst in edges]
+
+    return shuffled_edges, shuffle_perm, unshuffle_perm
 
 
 def main():
@@ -831,12 +862,27 @@ def main():
         default="structure_preserving",
         help="Strategy for injecting missing nodes: structure_preserving (restore original connections), random_existing (random single edge), random_pair (random unidirectional). Default: structure_preserving"
     )
+    parser.add_argument(
+        "--disable_shuffling",
+        action="store_true",
+        help="Disable node ID shuffling (not recommended - will create bias toward low node IDs)"
+    )
+    parser.add_argument(
+        "--shuffle_seed",
+        type=int,
+        default=42,
+        help="Random seed for node ID shuffling (default: 42)"
+    )
 
     args = parser.parse_args()
 
     logger.info("=" * 60)
-    logger.info("RMAT Structure Generator for Cora Dataset - v3")
+    logger.info("RMAT Structure Generator for Cora Dataset - v4")
     logger.info("Core: NVIDIA's RMAT algorithm with return_node_ids")
+    if not args.disable_shuffling:
+        logger.info(f"v4 Feature: Node ID shuffling enabled (seed={args.shuffle_seed})")
+    else:
+        logger.info("WARNING: Node ID shuffling disabled - may create bias!")
     if args.inject_missing_nodes:
         logger.info(f"Post-processing: Node injection enabled ({args.injection_strategy})")
     else:
@@ -868,10 +914,28 @@ def main():
 
     analyze_graph(original_edges, "Original Cora Graph")
 
+    # Step 1.5: Shuffle node IDs (v4 NEW)
+    if not args.disable_shuffling:
+        logger.info("\nStep 1.5: Shuffling node IDs to eliminate RMAT positional bias...")
+        shuffled_edges, shuffle_perm, unshuffle_perm = shuffle_node_ids(
+            original_edges,
+            num_original_nodes,
+            seed=args.shuffle_seed
+        )
+        logger.info(f"Node IDs shuffled with seed {args.shuffle_seed}")
+        logger.info("This prevents RMAT from concentrating edges in low-numbered nodes")
+        edges_for_fitting = shuffled_edges
+    else:
+        logger.warning("\nWARNING: Node ID shuffling disabled!")
+        logger.warning("RMAT will likely create bias toward training nodes (IDs 0-139)")
+        edges_for_fitting = original_edges
+        shuffle_perm = None
+        unshuffle_perm = None
+
     # Step 2: Fit RMAT generator
     logger.info("\nStep 2: Fitting RMAT generator...")
     generator = RMATGenerator(seed=42)
-    generator.fit(original_edges, is_directed=False)
+    generator.fit(edges_for_fitting, is_directed=False)
 
     # Step 3: Generate synthetic graph with node tracking
     logger.info("\nStep 3: Generating synthetic graph...")
@@ -885,8 +949,21 @@ def main():
         return_node_ids=True,  # [KEY FEATURE] - Repository's node tracking
     )
 
+    # Unshuffle node IDs back to original ordering
+    if not args.disable_shuffling:
+        logger.info("\nStep 3.5: Unshuffling node IDs back to original ordering...")
+        unshuffled_edges = [(shuffle_perm[src], shuffle_perm[dst]) for src, dst in synthetic_edges]
+        unshuffled_node_ids = {shuffle_perm[nid] for nid in node_ids_used}
+
+        synthetic_edges = unshuffled_edges
+        node_ids_used = unshuffled_node_ids
+        logger.info("Node IDs restored to original ordering")
+        logger.info("Graph structure now matches train/val/test split expectations")
+
     # Check node coverage
     missing_nodes = set(range(num_original_nodes)) - node_ids_used
+
+
 
     if missing_nodes:
         logger.warning(f"\n{'!' * 60}")
@@ -997,6 +1074,8 @@ def main():
             'c': generator._fit_results[2],
             'd': generator._fit_results[3],
         },
+        'shuffling_enabled': not args.disable_shuffling,
+        'shuffle_seed': args.shuffle_seed if not args.disable_shuffling else None,
         'generation_method': 'NVIDIA RMAT with structure-preserving node injection' if (
                     args.inject_missing_nodes and injection_stats and injection_stats[
                 'strategy'] == 'structure_preserving') else 'NVIDIA RMAT with node injection post-processing' if args.inject_missing_nodes else 'NVIDIA repository return_node_ids parameter',

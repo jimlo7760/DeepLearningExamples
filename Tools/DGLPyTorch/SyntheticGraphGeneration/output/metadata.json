@@ -1,11 +1,11 @@
 {
   "original": {
     "nodes": 2708,
-    "edges": 5286
+    "edges": 5429
   },
   "synthetic": {
     "nodes": 2708,
-    "edges": 8100,
+    "edges": 8373,
     "nodes_used": 2708,
     "node_coverage": 1.0,
     "missing_nodes": 0
@@ -16,18 +16,20 @@
     "c": 0.15,
     "d": 0.15
   },
+  "shuffling_enabled": true,
+  "shuffle_seed": 42,
   "generation_method": "NVIDIA RMAT with structure-preserving node injection",
   "node_injection": {
     "enabled": true,
     "strategy": "structure_preserving",
     "complete_coverage": true,
     "statistics": {
-      "missing_nodes": 442,
-      "injected_edges": 2826,
+      "missing_nodes": 419,
+      "injected_edges": 2958,
       "strategy": "structure_preserving",
-      "nodes_with_original_structure": 425,
-      "nodes_with_fallback": 17,
-      "injection_percentage": 34.888888888888886
+      "nodes_with_original_structure": 403,
+      "nodes_with_fallback": 16,
+      "injection_percentage": 35.32783948405589
     }
   }
 }
