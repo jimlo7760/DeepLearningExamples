@@ -1,14 +1,14 @@
 {
   "original": {
     "nodes": 2708,
-    "edges": 5429
+    "edges": 5278
   },
   "synthetic": {
     "nodes": 2708,
-    "edges": 8373,
-    "nodes_used": 2708,
-    "node_coverage": 1.0,
-    "missing_nodes": 0
+    "edges": 5267,
+    "nodes_used": 2261,
+    "node_coverage": 0.8349335302806499,
+    "missing_nodes": 447
   },
   "rmat_parameters": {
     "a": 0.45,
@@ -18,18 +18,11 @@
   },
   "shuffling_enabled": true,
   "shuffle_seed": 42,
-  "generation_method": "NVIDIA RMAT with structure-preserving node injection",
+  "generation_method": "NVIDIA repository return_node_ids parameter",
   "node_injection": {
-    "enabled": true,
-    "strategy": "structure_preserving",
-    "complete_coverage": true,
-    "statistics": {
-      "missing_nodes": 419,
-      "injected_edges": 2958,
-      "strategy": "structure_preserving",
-      "nodes_with_original_structure": 403,
-      "nodes_with_fallback": 16,
-      "injection_percentage": 35.32783948405589
-    }
+    "enabled": false,
+    "strategy": null,
+    "complete_coverage": false,
+    "statistics": null
   }
 }

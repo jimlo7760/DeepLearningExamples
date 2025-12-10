@@ -59,81 +59,140 @@ logger = logging.getLogger(__name__)
 
 class CoraDataLoader:
     """
-    [STANDALONE CODE]
-    Downloads and preprocesses the Cora dataset.
-    This handles data ingestion which is not in the repository's core generator.
+    Loads Cora dataset using PyTorch Geometric's Planetoid format
+
+    MODIFICATION NOTE: This replaces the original LINQS Cora loader to ensure:
+    1. Consistent 2708 nodes (vs ~2689 in original LINQS version)
+    2. Proper node ID ordering (0-2707) matching poisoned graphs
+    3. Compatibility with PyTorch Geometric-based evaluation framework
+    4. Consistency with NetGAN, SaGess, ML-GVAE generators
     """
 
-    def __init__(self, data_dir: str = "./data/cora"):
+    def __init__(self, data_dir: str = "./dataset/Citation"):
+        """
+        Initialize Planetoid Cora loader
+
+        Args:
+            data_dir: Directory to store/load Planetoid dataset (default: ./dataset/Citation)
+        """
         self.data_dir = data_dir
-        self.url = "https://linqs-data.soe.ucsc.edu/public/lbc/cora.tgz"
-
-    def download_and_extract(self):
-        """Download and extract Cora dataset"""
-        os.makedirs(self.data_dir, exist_ok=True)
-
-        tar_path = os.path.join(self.data_dir, "cora.tgz")
-
-        if not os.path.exists(tar_path):
-            logger.info(f"Downloading Cora dataset from {self.url}...")
-            urlretrieve(self.url, tar_path)
-            logger.info("Download complete")
-
-        logger.info("Extracting dataset...")
-        with tarfile.open(tar_path, "r:gz") as tar:
-            tar.extractall(self.data_dir)
-        logger.info("Extraction complete")
+        logger.info(f"CoraDataLoader initialized with Planetoid format")
+        logger.info(f"Data directory: {self.data_dir}")
 
     def load_graph(self) -> Tuple[List[Tuple[int, int]], dict]:
         """
-        Load the Cora graph structure
+        Load Cora graph using PyTorch Geometric's Planetoid dataset
 
         Returns:
             edges: List of (source, target) tuples
-            metadata: Dictionary with node_count, edge_count, labels
+            metadata: Dictionary containing:
+                - node_count: Number of nodes (2708 for Planetoid Cora)
+                - edge_count: Number of unique edges
+                - num_features: Feature dimension (1433 for Cora)
+                - num_classes: Number of classes (7 for Cora)
+                - format: 'Planetoid' to indicate data source
         """
         try:
-            self.download_and_extract()
-        except Exception as e:
-            logger.warning(f"Download failed: {e}. Using demo graph.")
+            from torch_geometric.datasets import Planetoid
+            import torch_geometric.transforms as T
+        except ImportError:
+            logger.error("=" * 70)
+            logger.error("PyTorch Geometric not installed!")
+            logger.error("=" * 70)
+            logger.error("Install with one of:")
+            logger.error(
+                "  CUDA 11.8: pip install torch-geometric torch-scatter torch-sparse -f https://data.pyg.org/whl/torch-2.0.0+cu118.html")
+            logger.error(
+                "  CPU only:  pip install torch-geometric torch-scatter torch-sparse -f https://data.pyg.org/whl/torch-2.0.0+cpu.html")
+            logger.error("=" * 70)
+            logger.warning("Falling back to demo graph...")
             return create_demo_graph()
 
-        # Load citations (edges)
-        cites_path = os.path.join(self.data_dir, "cora", "cora.cites")
+        logger.info(f"Loading Planetoid Cora dataset...")
+        logger.info(f"Location: {self.data_dir}")
 
-        logger.info(f"Loading graph from {cites_path}...")
+        try:
+            # Load Planetoid Cora dataset
+            # This will auto-download on first run (~3.5 MB)
+            dataset = Planetoid(
+                root=self.data_dir,
+                name='Cora',
+                transform=T.NormalizeFeatures()
+            )
+            data = dataset[0]
 
-        # Read edges
-        df = pd.read_csv(cites_path, sep='\t', header=None, names=['cited', 'citing'])
+            logger.info(f"Dataset loaded successfully from PyTorch Geometric")
 
-        # Create node ID mapping (continuous from 0)
-        unique_nodes = sorted(set(df['cited'].unique()) | set(df['citing'].unique()))
-        node_to_id = {node: idx for idx, node in enumerate(unique_nodes)}
+        except Exception as e:
+            logger.error(f"Failed to load Planetoid dataset: {e}")
+            logger.warning("Falling back to demo graph...")
+            return create_demo_graph()
 
-        # Map edges to continuous IDs
-        edges = [(node_to_id[citing], node_to_id[cited])
-                 for citing, cited in zip(df['citing'], df['cited'])]
+        # Extract edges as list of tuples
+        edge_index = data.edge_index.numpy()
+        edges = [(int(edge_index[0, i]), int(edge_index[1, i]))
+                 for i in range(edge_index.shape[1])]
 
-        # Load content for labels
-        content_path = os.path.join(self.data_dir, "cora", "cora.content")
-        content_df = pd.read_csv(content_path, sep='\t', header=None)
+        logger.info(f"Extracted {len(edges)} edges from edge_index tensor")
 
-        # Map labels
-        labels = {}
-        for _, row in content_df.iterrows():
-            paper_id = row[0]
-            if paper_id in node_to_id:
-                labels[node_to_id[paper_id]] = row[content_df.shape[1] - 1]
+        # Remove duplicate edges (Planetoid stores undirected as bidirectional)
+        # Keep only one direction for each edge
+        unique_edges = []
+        seen = set()
+        for src, dst in edges:
+            # Normalize edge representation: always store as (min, max)
+            edge_tuple = (min(src, dst), max(src, dst))
+            if edge_tuple not in seen:
+                seen.add(edge_tuple)
+                unique_edges.append((src, dst))
 
+        logger.info(f"After removing duplicates: {len(unique_edges)} unique edges")
+
+        # Prepare metadata dictionary
         metadata = {
-            'node_count': len(unique_nodes),
-            'edge_count': len(edges),
-            'labels': labels
+            'node_count': int(data.num_nodes),
+            'edge_count': len(unique_edges),
+            'num_features': int(data.num_features),
+            'num_classes': int(dataset.num_classes),
+            'format': 'Planetoid',  # Flag to indicate data source
+            # Store additional info for potential use in evaluation
+            '_full_edge_index': data.edge_index,  # Keep for reference
+            '_features': data.x,  # Node features
+            '_labels': data.y,  # Node labels
+            '_train_mask': data.train_mask,  # Pre-split masks
+            '_val_mask': data.val_mask,
+            '_test_mask': data.test_mask
         }
 
-        logger.info(f"Loaded graph: {metadata['node_count']} nodes, {metadata['edge_count']} edges")
+        logger.info(f"\n{'=' * 60}")
+        logger.info(f"Loaded Planetoid Cora Dataset:")
+        logger.info(f"{'=' * 60}")
+        logger.info(f"  Nodes:        {metadata['node_count']}")
+        logger.info(f"  Edges:        {metadata['edge_count']} (unique, undirected)")
+        logger.info(f"  Features:     {metadata['num_features']}")
+        logger.info(f"  Classes:      {metadata['num_classes']}")
+        logger.info(f"  Format:       {metadata['format']}")
+        logger.info(f"  Train nodes:  {data.train_mask.sum().item()}")
+        logger.info(f"  Val nodes:    {data.val_mask.sum().item()}")
+        logger.info(f"  Test nodes:   {data.test_mask.sum().item()}")
+        logger.info(f"{'=' * 60}\n")
 
-        return edges, metadata
+        # Verify node IDs are continuous from 0 to N-1
+        all_nodes = set()
+        for src, dst in unique_edges:
+            all_nodes.add(src)
+            all_nodes.add(dst)
+
+        expected_nodes = set(range(metadata['node_count']))
+        if all_nodes == expected_nodes:
+            logger.info(f"✓ Node ID verification passed: all nodes 0-{metadata['node_count'] - 1} present in edge list")
+        else:
+            missing = expected_nodes - all_nodes
+            if missing:
+                logger.warning(f"⚠ Some nodes not in edge list: {len(missing)} isolated nodes")
+                logger.warning(f"  This is expected for Cora (has isolated nodes in test set)")
+
+        return unique_edges, metadata
 
 
 def create_demo_graph() -> Tuple[List[Tuple[int, int]], dict]:
@@ -945,7 +1004,7 @@ def main():
         num_nodes=num_original_nodes,
         num_edges=num_original_edges,
         is_directed=False,
-        noise=0.5,
+        noise=0.1,
         return_node_ids=True,  # [KEY FEATURE] - Repository's node tracking
     )
 
