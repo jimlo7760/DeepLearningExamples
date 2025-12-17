@@ -53,11 +53,32 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+try:
+    from torch_geometric.datasets import Planetoid, CitationFull, PolBlogs
+    from torch_geometric.utils import remove_self_loops, to_undirected
+    import torch_geometric.transforms as T
+except ImportError:
+    logger.error("PyTorch Geometric datasets not available")
+    logger.error("Install with: pip install torch-geometric")
+
+
+
+
 # ============================================================================
 # [STANDALONE CODE] - Data Loading
 # ============================================================================
 
-class CoraDataLoader:
+
+class DatasetLoader:
+    """Base class for dataset loaders"""
+
+    def __init__(self, data_dir: str = "./dataset"):
+        self.data_dir = data_dir
+
+    def load_graph(self) -> Tuple[List[Tuple[int, int]], dict]:
+        raise NotImplementedError("Subclasses must implement load_graph()")
+
+class CoraDataLoader(DatasetLoader):
     """
     Loads Cora dataset using PyTorch Geometric's Planetoid format
 
@@ -69,13 +90,7 @@ class CoraDataLoader:
     """
 
     def __init__(self, data_dir: str = "./dataset/Citation"):
-        """
-        Initialize Planetoid Cora loader
-
-        Args:
-            data_dir: Directory to store/load Planetoid dataset (default: ./dataset/Citation)
-        """
-        self.data_dir = data_dir
+        super().__init__(data_dir)  # ADD: Call to parent class
         logger.info(f"CoraDataLoader initialized with Planetoid format")
         logger.info(f"Data directory: {self.data_dir}")
 
@@ -195,6 +210,212 @@ class CoraDataLoader:
         return unique_edges, metadata
 
 
+class CiteSeerDataLoader(DatasetLoader):
+    """
+    Loads CiteSeer dataset using PyTorch Geometric's Planetoid format
+
+    Specifications:
+    - 3,327 nodes
+    - 3,703 features
+    - 6 classes
+    """
+
+    def __init__(self, data_dir: str = "./dataset/Citation"):
+        super().__init__(data_dir)
+        logger.info(f"CiteSeerDataLoader initialized with Planetoid format")
+        logger.info(f"Data directory: {self.data_dir}")
+
+    def load_graph(self) -> Tuple[List[Tuple[int, int]], dict]:
+        """Load CiteSeer graph using PyTorch Geometric's Planetoid dataset"""
+        try:
+            from torch_geometric.datasets import Planetoid
+            import torch_geometric.transforms as T
+        except ImportError:
+            logger.error("=" * 70)
+            logger.error("PyTorch Geometric not installed!")
+            logger.error("Install with: pip install torch-geometric")
+            logger.error("=" * 70)
+            raise ImportError("PyTorch Geometric required")
+
+        logger.info(f"Loading Planetoid CiteSeer dataset...")
+
+        try:
+            dataset = Planetoid(
+                root=self.data_dir,
+                name='CiteSeer',  # KEY DIFFERENCE: 'CiteSeer' instead of 'Cora'
+                transform=T.NormalizeFeatures()
+            )
+            data = dataset[0]
+            logger.info(f"Dataset loaded successfully from PyTorch Geometric")
+        except Exception as e:
+            logger.error(f"Failed to load Planetoid dataset: {e}")
+            raise
+
+        # Extract edges (same as Cora)
+        edge_index = data.edge_index.numpy()
+        edges = [(int(edge_index[0, i]), int(edge_index[1, i]))
+                 for i in range(edge_index.shape[1])]
+
+        unique_edges = list(set(tuple(sorted([src, dst])) for src, dst in edges))
+
+        metadata = {
+            'node_count': data.num_nodes,
+            'edge_count': len(unique_edges),
+            'num_features': data.num_features,
+            'num_classes': dataset.num_classes,
+            'format': 'Planetoid',
+            'dataset_name': 'CiteSeer'  # KEY DIFFERENCE
+        }
+
+        logger.info(f"{'=' * 60}")
+        logger.info(f"Dataset: CiteSeer (Planetoid)")
+        logger.info(f"  Nodes:        {metadata['node_count']}")
+        logger.info(f"  Edges:        {metadata['edge_count']}")
+        logger.info(f"  Features:     {metadata['num_features']}")
+        logger.info(f"  Classes:      {metadata['num_classes']}")
+        logger.info(f"{'=' * 60}\n")
+
+        return unique_edges, metadata
+
+
+class CoraMLDataLoader(DatasetLoader):
+    """
+    Loads Cora-ML dataset using PyTorch Geometric's CitationFull format
+
+    Specifications:
+    - 2,995 nodes
+    - 2,879 features
+    - 7 classes
+    """
+
+    def __init__(self, data_dir: str = "./dataset/Citation"):
+        super().__init__(data_dir)
+        logger.info(f"CoraMLDataLoader initialized with CitationFull format")
+        logger.info(f"Data directory: {self.data_dir}")
+
+    def load_graph(self) -> Tuple[List[Tuple[int, int]], dict]:
+        """Load Cora-ML graph using PyTorch Geometric's CitationFull dataset"""
+        try:
+            from torch_geometric.datasets import CitationFull  # KEY DIFFERENCE: CitationFull not Planetoid
+            import torch_geometric.transforms as T
+        except ImportError:
+            logger.error("=" * 70)
+            logger.error("PyTorch Geometric not installed!")
+            logger.error("Install with: pip install torch-geometric")
+            logger.error("=" * 70)
+            raise ImportError("PyTorch Geometric required")
+
+        logger.info(f"Loading CitationFull Cora-ML dataset...")
+
+        try:
+            dataset = CitationFull(  # KEY DIFFERENCE: CitationFull not Planetoid
+                root=self.data_dir,
+                name='Cora_ML',  # KEY DIFFERENCE
+                transform=T.NormalizeFeatures()
+            )
+            data = dataset[0]
+            logger.info(f"Dataset loaded successfully from PyTorch Geometric")
+        except Exception as e:
+            logger.error(f"Failed to load CitationFull dataset: {e}")
+            raise
+
+        # Extract edges (same process)
+        edge_index = data.edge_index.numpy()
+        edges = [(int(edge_index[0, i]), int(edge_index[1, i]))
+                 for i in range(edge_index.shape[1])]
+
+        unique_edges = list(set(tuple(sorted([src, dst])) for src, dst in edges))
+
+        metadata = {
+            'node_count': data.num_nodes,
+            'edge_count': len(unique_edges),
+            'num_features': data.num_features,
+            'num_classes': dataset.num_classes,
+            'format': 'CitationFull',  # KEY DIFFERENCE
+            'dataset_name': 'Cora_ML'  # KEY DIFFERENCE
+        }
+
+        logger.info(f"{'=' * 60}")
+        logger.info(f"Dataset: Cora-ML (CitationFull)")
+        logger.info(f"  Nodes:        {metadata['node_count']}")
+        logger.info(f"  Edges:        {metadata['edge_count']}")
+        logger.info(f"  Features:     {metadata['num_features']}")
+        logger.info(f"  Classes:      {metadata['num_classes']}")
+        logger.info(f"{'=' * 60}\n")
+
+        return unique_edges, metadata
+
+
+class PolBlogsDataLoader(DatasetLoader):
+    """
+    Loads PolBlogs dataset using PyTorch Geometric's PolBlogs format
+
+    Specifications:
+    - 1,490 nodes
+    - 1,490 features (identity matrix - no real features)
+    - 2 classes
+    """
+
+    def __init__(self, data_dir: str = "./dataset/PolBlogs"):  # KEY DIFFERENCE: different default path
+        super().__init__(data_dir)
+        logger.info(f"PolBlogsDataLoader initialized")
+        logger.info(f"Data directory: {self.data_dir}")
+
+    def load_graph(self) -> Tuple[List[Tuple[int, int]], dict]:
+        """Load PolBlogs graph using PyTorch Geometric's PolBlogs dataset"""
+        try:
+            from torch_geometric.datasets import PolBlogs  # KEY DIFFERENCE: PolBlogs dataset
+            from torch_geometric.utils import remove_self_loops, to_undirected  # KEY DIFFERENCE: need preprocessing
+        except ImportError:
+            logger.error("=" * 70)
+            logger.error("PyTorch Geometric not installed!")
+            logger.error("Install with: pip install torch-geometric")
+            logger.error("=" * 70)
+            raise ImportError("PyTorch Geometric required")
+
+        logger.info(f"Loading PolBlogs dataset...")
+
+        try:
+            dataset = PolBlogs(root=self.data_dir)  # KEY DIFFERENCE: PolBlogs, no transform
+            data = dataset[0]
+
+            # KEY DIFFERENCE: Preprocessing required for PolBlogs
+            data.edge_index, _ = remove_self_loops(data.edge_index)
+            data.edge_index = to_undirected(data.edge_index)
+
+            logger.info(f"Dataset loaded successfully from PyTorch Geometric")
+            logger.info(f"  (Preprocessing applied: removed self-loops, converted to undirected)")
+        except Exception as e:
+            logger.error(f"Failed to load PolBlogs dataset: {e}")
+            raise
+
+        # Extract edges (same process)
+        edge_index = data.edge_index.numpy()
+        edges = [(int(edge_index[0, i]), int(edge_index[1, i]))
+                 for i in range(edge_index.shape[1])]
+
+        unique_edges = list(set(tuple(sorted([src, dst])) for src, dst in edges))
+
+        metadata = {
+            'node_count': data.num_nodes,
+            'edge_count': len(unique_edges),
+            'num_features': data.num_nodes,  # KEY DIFFERENCE: identity matrix
+            'num_classes': dataset.num_classes,
+            'format': 'PolBlogs',  # KEY DIFFERENCE
+            'dataset_name': 'PolBlogs',  # KEY DIFFERENCE
+            'note': 'Uses identity matrix as features (no real node features)'
+        }
+
+        logger.info(f"{'=' * 60}")
+        logger.info(f"Dataset: PolBlogs")
+        logger.info(f"  Nodes:        {metadata['node_count']}")
+        logger.info(f"  Edges:        {metadata['edge_count']}")
+        logger.info(f"  Features:     {metadata['num_features']} (identity matrix)")
+        logger.info(f"  Classes:      {metadata['num_classes']}")
+        logger.info(f"{'=' * 60}\n")
+
+        return unique_edges, metadata
+
 def create_demo_graph() -> Tuple[List[Tuple[int, int]], dict]:
     """
     [STANDALONE CODE]
@@ -217,6 +438,38 @@ def create_demo_graph() -> Tuple[List[Tuple[int, int]], dict]:
     }
 
 
+def get_dataset_loader(dataset_name: str, data_dir: Optional[str] = None) -> DatasetLoader:
+    """
+    Factory function to get the appropriate dataset loader
+
+    Args:
+        dataset_name: Name of dataset ('cora', 'citeseer', 'cora_ml', 'polblogs')
+        data_dir: Optional custom data directory
+
+    Returns:
+        DatasetLoader instance for the specified dataset
+    """
+    dataset_name_lower = dataset_name.lower()
+
+    loaders = {
+        'cora': CoraDataLoader,
+        'citeseer': CiteSeerDataLoader,
+        'cora_ml': CoraMLDataLoader,
+        'coraml': CoraMLDataLoader,  # Alternative naming
+        'polblogs': PolBlogsDataLoader
+    }
+
+    if dataset_name_lower not in loaders:
+        raise ValueError(f"Unknown dataset: {dataset_name}. Supported: {list(loaders.keys())}")
+
+    loader_class = loaders[dataset_name_lower]
+
+    if data_dir is None:
+        return loader_class()
+    else:
+        return loader_class(data_dir=data_dir)
+
+
 def load_poisoned_graph(attack_method: str, attack_rate: float,
                         dataset: str = "Cora",
                         poisoned_dir: str = "../robustsyntheticgraph/CLGA/poisoned_adj") -> Tuple[
@@ -234,10 +487,19 @@ def load_poisoned_graph(attack_method: str, attack_rate: float,
         edges: List of (source, target) tuples from poisoned graph
         metadata: Dictionary with node_count, edge_count
     """
-    # Construct filename following the NetGAN pattern
+    # NEW: Normalize dataset name for file path
+    dataset_map = {
+        'cora': 'Cora',
+        'citeseer': 'CiteSeer',
+        'cora_ml': 'Cora_ML',
+        'coraml': 'Cora_ML',
+        'polblogs': 'PolBlogs'
+    }
+    dataset_file_name = dataset_map.get(dataset.lower(), dataset)
 
+    # CHANGED: Use dataset_file_name instead of hardcoded "Cora"
     format_attack_rate = f"{attack_rate:.6f}"
-    pkl_filename = f"{dataset}_{attack_method}_{format_attack_rate}_adj.pkl"
+    pkl_filename = f"{dataset_file_name}_{attack_method}_{format_attack_rate}_adj.pkl"
     pkl_path = os.path.join(poisoned_dir, pkl_filename)
 
     logger.info(f"Loading poisoned graph from {pkl_path}...")
@@ -245,7 +507,7 @@ def load_poisoned_graph(attack_method: str, attack_rate: float,
     if not os.path.exists(pkl_path):
         raise FileNotFoundError(
             f"Poisoned adjacency matrix not found: {pkl_path}\n"
-            f"Expected format: {dataset}_{{attack_method}}_{{attack_rate}}_adj.pkl\n"
+            f"Expected format: {dataset_file_name}_{{attack_method}}_{{attack_rate}}_adj.pkl\n"
             f"Please ensure the poisoned adjacency matrices are generated first."
         )
 
@@ -260,7 +522,6 @@ def load_poisoned_graph(attack_method: str, attack_rate: float,
         adj_matrix = poisoned_adj
 
     # Convert adjacency matrix to edge list
-    # For directed graphs, we iterate through the matrix
     edges = []
     n_nodes = adj_matrix.shape[0]
 
@@ -268,7 +529,6 @@ def load_poisoned_graph(attack_method: str, attack_rate: float,
     is_symmetric = np.allclose(adj_matrix, adj_matrix.T)
 
     if is_symmetric:
-        # For symmetric matrices, only extract upper triangle
         logger.info("Detected symmetric (undirected) adjacency matrix")
         logger.info("Extracting edges from upper triangle to avoid duplication")
         for i in range(n_nodes):
@@ -276,7 +536,6 @@ def load_poisoned_graph(attack_method: str, attack_rate: float,
                 if adj_matrix[i, j] > 0:
                     edges.append((i, j))
     else:
-        # For directed matrices, extract all edges
         logger.info("Detected directed adjacency matrix")
         for i in range(n_nodes):
             for j in range(n_nodes):
@@ -288,14 +547,14 @@ def load_poisoned_graph(attack_method: str, attack_rate: float,
         'edge_count': len(edges),
         'attack_method': attack_method,
         'attack_rate': attack_rate,
-        'is_symmetric': is_symmetric
+        'is_symmetric': is_symmetric,
+        'dataset_name': dataset_file_name  # NEW: Add dataset name to metadata
     }
 
     logger.info(f"Loaded poisoned graph: {metadata['node_count']} nodes, {metadata['edge_count']} edges")
     logger.info(f"Attack: {attack_method} with rate {attack_rate}")
 
     return edges, metadata
-
 
 # ============================================================================
 # [NVIDIA REPOSITORY CODE] - Adapted from syngen/generator/graph/utils.py
@@ -875,7 +1134,7 @@ def main():
     """
 
     parser = argparse.ArgumentParser(
-        description="RMAT Structure Generator for Cora Dataset with Poisoning Attack Support"
+        description="RMAT Structure Generator for Citation Networks (Cora, CiteSeer, Cora-ML, PolBlogs)"
     )
     parser.add_argument(
         "--attack_method",
@@ -894,8 +1153,15 @@ def main():
     parser.add_argument(
         "--dataset",
         type=str,
-        default="Cora",
-        help="Dataset name (default: Cora)"
+        choices=["cora", "citeseer", "cora_ml", "polblogs"],
+        default="cora",
+        help="Dataset to generate synthetic graph for (default: cora)"
+    )
+    parser.add_argument(
+        "--data_dir",
+        type=str,
+        default=None,
+        help="Custom data directory for dataset (optional)"
     )
     parser.add_argument(
         "--poisoned_dir",
@@ -936,8 +1202,10 @@ def main():
     args = parser.parse_args()
 
     logger.info("=" * 60)
-    logger.info("RMAT Structure Generator for Cora Dataset - v4")
+    logger.info("RMAT Structure Generator - Multi-Dataset Support")
+    logger.info(f"Target Dataset: {args.dataset.upper()}")
     logger.info("Core: NVIDIA's RMAT algorithm with return_node_ids")
+
     if not args.disable_shuffling:
         logger.info(f"v4 Feature: Node ID shuffling enabled (seed={args.shuffle_seed})")
     else:
@@ -951,19 +1219,21 @@ def main():
     # Step 1: Load original graph
     logger.info("\nStep 1: Loading Cora dataset...")
 
+    logger.info(f"\nStep 1: Loading {args.dataset} dataset...")
+
     if args.attack_method == "none":
         # Load clean graph
-        logger.info("Loading clean Cora dataset...")
-        loader = CoraDataLoader()
+        logger.info(f"Loading clean {args.dataset} dataset...")
+        loader = get_dataset_loader(args.dataset, args.data_dir)  # CHANGED: use factory function
         original_edges, metadata = loader.load_graph()
         graph_type = "clean"
     else:
-        # [CHANGE 4] Load poisoned graph
+        # Load poisoned graph
         logger.info(f"Loading poisoned graph ({args.attack_method}, rate={args.attack_rate})...")
         original_edges, metadata = load_poisoned_graph(
             attack_method=args.attack_method,
             attack_rate=args.attack_rate,
-            dataset=args.dataset,
+            dataset=args.dataset,  # ALREADY PASSING dataset, just verify it's there
             poisoned_dir=args.poisoned_dir
         )
         graph_type = "poisoned"
@@ -1089,22 +1359,18 @@ def main():
     )
     logger.info(f"Adjacency matrix shape: {adj_matrix.shape}")
 
+    output_dir = args.output_dir
     if args.attack_method == "none":
-        adj_filename = os.path.join(output_dir, "rmat_Cora.npy")
-        edges_filename = os.path.join(output_dir, "rmat_Cora_edges.csv")
-        metadata_filename = os.path.join(output_dir, "metadata.json")
+        adj_filename = os.path.join(output_dir, f"{args.dataset}_synthetic.npy")
+        edges_filename = os.path.join(output_dir, f"{args.dataset}_edges.csv")
     else:
         adj_filename = os.path.join(
             output_dir,
-            f"rmat_Cora_{args.attack_method}_{args.attack_rate}.npy"
+            f"{args.dataset}_{args.attack_method}_{args.attack_rate}_synthetic.npy"
         )
         edges_filename = os.path.join(
             output_dir,
-            f"rmat_Cora_{args.attack_method}_{args.attack_rate}_edges.csv"
-        )
-        metadata_filename = os.path.join(
-            output_dir,
-            f"metadata_{args.attack_method}_{args.attack_rate}.json"
+            f"{args.dataset}_{args.attack_method}_{args.attack_rate}_edges.csv"
         )
     # Save in format compatible with eval_graph.py
     # Following the pattern: {method}_{dataset}.npy
